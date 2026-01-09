@@ -1,0 +1,50 @@
+[
+{
+  "directory": "D:/MemoryPool/memory-pool/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\clang++.exe -ID:/MemoryPool/memory-pool/v3/include -g -std=gnu++17 -Wall -O2 -o CMakeFiles\\unit_test.dir\\src\\CentralCache.cpp.obj -c D:\\MemoryPool\\memory-pool\\v3\\src\\CentralCache.cpp",
+  "file": "D:\\MemoryPool\\memory-pool\\v3\\src\\CentralCache.cpp",
+  "output": "CMakeFiles\\unit_test.dir\\src\\CentralCache.cpp.obj"
+},
+{
+  "directory": "D:/MemoryPool/memory-pool/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\clang++.exe -ID:/MemoryPool/memory-pool/v3/include -g -std=gnu++17 -Wall -O2 -o CMakeFiles\\unit_test.dir\\src\\PageCache.cpp.obj -c D:\\MemoryPool\\memory-pool\\v3\\src\\PageCache.cpp",
+  "file": "D:\\MemoryPool\\memory-pool\\v3\\src\\PageCache.cpp",
+  "output": "CMakeFiles\\unit_test.dir\\src\\PageCache.cpp.obj"
+},
+{
+  "directory": "D:/MemoryPool/memory-pool/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\clang++.exe -ID:/MemoryPool/memory-pool/v3/include -g -std=gnu++17 -Wall -O2 -o CMakeFiles\\unit_test.dir\\src\\ThreadCache.cpp.obj -c D:\\MemoryPool\\memory-pool\\v3\\src\\ThreadCache.cpp",
+  "file": "D:\\MemoryPool\\memory-pool\\v3\\src\\ThreadCache.cpp",
+  "output": "CMakeFiles\\unit_test.dir\\src\\ThreadCache.cpp.obj"
+},
+{
+  "directory": "D:/MemoryPool/memory-pool/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\clang++.exe -ID:/MemoryPool/memory-pool/v3/include -g -std=gnu++17 -Wall -O2 -o CMakeFiles\\unit_test.dir\\tests\\UnitTest.cpp.obj -c D:\\MemoryPool\\memory-pool\\v3\\tests\\UnitTest.cpp",
+  "file": "D:\\MemoryPool\\memory-pool\\v3\\tests\\UnitTest.cpp",
+  "output": "CMakeFiles\\unit_test.dir\\tests\\UnitTest.cpp.obj"
+},
+{
+  "directory": "D:/MemoryPool/memory-pool/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\clang++.exe -ID:/MemoryPool/memory-pool/v3/include -g -std=gnu++17 -Wall -O2 -o CMakeFiles\\perf_test.dir\\src\\CentralCache.cpp.obj -c D:\\MemoryPool\\memory-pool\\v3\\src\\CentralCache.cpp",
+  "file": "D:\\MemoryPool\\memory-pool\\v3\\src\\CentralCache.cpp",
+  "output": "CMakeFiles\\perf_test.dir\\src\\CentralCache.cpp.obj"
+},
+{
+  "directory": "D:/MemoryPool/memory-pool/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\clang++.exe -ID:/MemoryPool/memory-pool/v3/include -g -std=gnu++17 -Wall -O2 -o CMakeFiles\\perf_test.dir\\src\\PageCache.cpp.obj -c D:\\MemoryPool\\memory-pool\\v3\\src\\PageCache.cpp",
+  "file": "D:\\MemoryPool\\memory-pool\\v3\\src\\PageCache.cpp",
+  "output": "CMakeFiles\\perf_test.dir\\src\\PageCache.cpp.obj"
+},
+{
+  "directory": "D:/MemoryPool/memory-pool/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\clang++.exe -ID:/MemoryPool/memory-pool/v3/include -g -std=gnu++17 -Wall -O2 -o CMakeFiles\\perf_test.dir\\src\\ThreadCache.cpp.obj -c D:\\MemoryPool\\memory-pool\\v3\\src\\ThreadCache.cpp",
+  "file": "D:\\MemoryPool\\memory-pool\\v3\\src\\ThreadCache.cpp",
+  "output": "CMakeFiles\\perf_test.dir\\src\\ThreadCache.cpp.obj"
+},
+{
+  "directory": "D:/MemoryPool/memory-pool/build",
+  "command": "C:\\msys64\\ucrt64\\bin\\clang++.exe -ID:/MemoryPool/memory-pool/v3/include -g -std=gnu++17 -Wall -O2 -o CMakeFiles\\perf_test.dir\\tests\\PerformanceTest.cpp.obj -c D:\\MemoryPool\\memory-pool\\v3\\tests\\PerformanceTest.cpp",
+  "file": "D:\\MemoryPool\\memory-pool\\v3\\tests\\PerformanceTest.cpp",
+  "output": "CMakeFiles\\perf_test.dir\\tests\\PerformanceTest.cpp.obj"
+}
+]
