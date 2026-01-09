@@ -1,10 +1,12 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#include <chrono>
 
 #include "../include/MemoryPool.h"
 
 using namespace Kama_memoryPool;
+using namespace std::chrono;
 
 // 测试用例
 class P1 
@@ -37,7 +39,7 @@ void BenchmarkMemoryPool(size_t ntimes, size_t nworks, size_t rounds)
 		vthread[k] = std::thread([&]() {
 			for (size_t j = 0; j < rounds; ++j)
 			{
-				size_t begin1 = clock();
+				auto begin1 = high_resolution_clock::now();
 				for (size_t i = 0; i < ntimes; i++)
 				{
                     P1* p1 = newElement<P1>(); // 内存池对外接口
@@ -49,9 +51,9 @@ void BenchmarkMemoryPool(size_t ntimes, size_t nworks, size_t rounds)
                     P4* p4 = newElement<P4>();
                     deleteElement<P4>(p4);
 				}
-				size_t end1 = clock();
+				auto end1 = high_resolution_clock::now();
 
-				total_costtime += end1 - begin1;
+				total_costtime += duration_cast<milliseconds>(end1 - begin1).count();
 			}
 		});
 	}
@@ -59,7 +61,7 @@ void BenchmarkMemoryPool(size_t ntimes, size_t nworks, size_t rounds)
 	{
 		t.join();
 	}
-	printf("%lu个线程并发执行%lu轮次，每轮次newElement&deleteElement %lu次，总计花费：%lu ms\n", nworks, rounds, ntimes, total_costtime);
+	printf("%zu个线程并发执行%zu轮次，每轮次newElement&deleteElement %zu次，总计花费：%zu ms\n", nworks, rounds, ntimes, total_costtime);
 }
 
 void BenchmarkNew(size_t ntimes, size_t nworks, size_t rounds)
@@ -71,7 +73,7 @@ void BenchmarkNew(size_t ntimes, size_t nworks, size_t rounds)
 		vthread[k] = std::thread([&]() {
 			for (size_t j = 0; j < rounds; ++j)
 			{
-				size_t begin1 = clock();
+				auto begin1 = high_resolution_clock::now();
 				for (size_t i = 0; i < ntimes; i++)
 				{
                     P1* p1 = new P1;
@@ -83,9 +85,9 @@ void BenchmarkNew(size_t ntimes, size_t nworks, size_t rounds)
                     P4* p4 = new P4;
                     delete p4;
 				}
-				size_t end1 = clock();
+				auto end1 = high_resolution_clock::now();
 				
-				total_costtime += end1 - begin1;
+				total_costtime += duration_cast<milliseconds>(end1 - begin1).count();
 			}
 		});
 	}
@@ -93,16 +95,22 @@ void BenchmarkNew(size_t ntimes, size_t nworks, size_t rounds)
 	{
 		t.join();
 	}
-	printf("%lu个线程并发执行%lu轮次，每轮次malloc&free %lu次，总计花费：%lu ms\n", nworks, rounds, ntimes, total_costtime);
+	printf("%zu个线程并发执行%zu轮次，每轮次malloc&free %zu次，总计花费：%zu ms\n", nworks, rounds, ntimes, total_costtime);
 }
 
 int main()
 {
     HashBucket::initMemoryPool(); // 使用内存池接口前一定要先调用该函数
-	BenchmarkMemoryPool(100, 1, 10); // 测试内存池
+    
+    std::cout << "Single Thread Benchmark:" << std::endl;
+	BenchmarkMemoryPool(100000, 1, 10); // 测试内存池
 	std::cout << "===========================================================================" << std::endl;
-	std::cout << "===========================================================================" << std::endl;
-	BenchmarkNew(100, 1, 10); // 测试 new delete
+	BenchmarkNew(100000, 1, 10); // 测试 new delete
+
+    std::cout << "\nMulti Thread Benchmark (4 threads):" << std::endl;
+    BenchmarkMemoryPool(100000, 4, 10);
+    std::cout << "===========================================================================" << std::endl;
+    BenchmarkNew(100000, 4, 10);
 	
 	return 0;
 }

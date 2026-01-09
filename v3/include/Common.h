@@ -2,7 +2,7 @@
 #include <cstddef>
 #include <atomic>
 #include <array>
-
+#include <stdio.h>
 namespace Kama_memoryPool 
 {
 // 对齐数和大小定义

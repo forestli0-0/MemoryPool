@@ -54,5 +54,14 @@
         "cinttypes": "cpp",
         "typeinfo": "cpp"
     },
-    "cmake.sourceDirectory": "D:/MemoryPool/memory-pool/v3"
+    "cmake.sourceDirectory": "D:/MemoryPool/memory-pool/v1",
+    "clangd.arguments": [
+    "--header-insertion=never",
+    "--clang-tidy",
+    "--query-driver=/usr/bin/g++",
+    "--compile-commands-dir=${workspaceFolder}/build",
+    "--background-index"
+  ],
+  "C_Cpp.intelliSenseEngine": "disabled",
+
 }

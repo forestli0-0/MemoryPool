@@ -26,16 +26,6 @@ public:
 // 性能测试类
 class PerformanceTest 
 {
-private:
-    // 测试统计信息
-    struct TestStats 
-    {
-        double memPoolTime{0.0};
-        double systemTime{0.0};
-        size_t totalAllocs{0};
-        size_t totalBytes{0};
-    };
-
 public:
     // 1. 系统预热
     static void warmup() 
@@ -136,7 +126,7 @@ public:
                   << " threads, " << ALLOCS_PER_THREAD << " allocations each):" 
                   << std::endl;
         
-        auto threadFunc = [](bool useMemPool) 
+        auto threadFunc = [MAX_SIZE, ALLOCS_PER_THREAD](bool useMemPool) 
         {
             std::random_device rd;
             std::mt19937 gen(rd());
@@ -217,7 +207,7 @@ public:
                       << t.elapsed() << " ms" << std::endl;
         }
     }
-    
+
     // 4. 混合大小测试
     static void testMixedSizes() 
     {
@@ -292,6 +282,88 @@ public:
                       << t.elapsed() << " ms" << std::endl;
         }
     }
+
+    // 5. V1 对比测试 (完全复刻 V1 的测试逻辑)
+    static void testV1Comparable()
+    {
+        // P1: int (4 bytes) -> 8
+        // P2: int[5] (20 bytes) -> 24
+        // P3: int[10] (40 bytes) -> 40
+        // P4: int[20] (80 bytes) -> 80
+        const size_t SIZES[] = {4, 20, 40, 80};
+        const size_t NTIMES = 100000;
+        const size_t ROUNDS = 10;
+        
+        std::cout << "\n=== V1 Comparable Benchmark ===" << std::endl;
+
+        auto runBenchmark = [&](size_t nworks)
+        {
+            std::cout << "Threads: " << nworks << ", Rounds: " << ROUNDS 
+                      << ", Iterations: " << NTIMES << std::endl;
+
+            // Memory Pool Test
+            {
+                Timer t1;
+                std::vector<std::thread> threads;
+                for(size_t k=0; k<nworks; ++k)
+                {
+                    threads.emplace_back([&]()
+                    {
+                        for(size_t j=0; j<ROUNDS; ++j)
+                        {
+                            for(size_t i=0; i<NTIMES; ++i)
+                            {
+                                void* p1 = MemoryPool::allocate(SIZES[0]);
+                                MemoryPool::deallocate(p1, SIZES[0]);
+                                void* p2 = MemoryPool::allocate(SIZES[1]);
+                                MemoryPool::deallocate(p2, SIZES[1]);
+                                void* p3 = MemoryPool::allocate(SIZES[2]);
+                                MemoryPool::deallocate(p3, SIZES[2]);
+                                void* p4 = MemoryPool::allocate(SIZES[3]);
+                                MemoryPool::deallocate(p4, SIZES[3]);
+                            }
+                        }
+                    });
+                }
+                for(auto& t : threads) t.join();
+                std::cout << "Memory Pool: " << t1.elapsed() << " ms" << std::endl;
+            }
+
+            // System New/Delete Test
+            {
+                Timer t2;
+                std::vector<std::thread> threads;
+                for(size_t k=0; k<nworks; ++k)
+                {
+                    threads.emplace_back([&]()
+                    {
+                        for(size_t j=0; j<ROUNDS; ++j)
+                        {
+                            for(size_t i=0; i<NTIMES; ++i)
+                            {
+                                void* p1 = new char[SIZES[0]];
+                                delete[] (char*)p1;
+                                void* p2 = new char[SIZES[1]];
+                                delete[] (char*)p2;
+                                void* p3 = new char[SIZES[2]];
+                                delete[] (char*)p3;
+                                void* p4 = new char[SIZES[3]];
+                                delete[] (char*)p4;
+                            }
+                        }
+                    });
+                }
+                for(auto& t : threads) t.join();
+                std::cout << "New/Delete:  " << t2.elapsed() << " ms" << std::endl;
+            }
+        };
+
+        std::cout << "--- Single Thread ---" << std::endl;
+        runBenchmark(1);
+
+        std::cout << "--- Multi Thread (4 threads) ---" << std::endl;
+        runBenchmark(4);
+    }
 };
 
 int main() 
@@ -305,6 +377,7 @@ int main()
     PerformanceTest::testSmallAllocation();
     PerformanceTest::testMultiThreaded();
     PerformanceTest::testMixedSizes();
+    PerformanceTest::testV1Comparable();
     
     return 0;
 }

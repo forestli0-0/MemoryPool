@@ -68,7 +68,7 @@ void testMultiThreading()
     const int ALLOCS_PER_THREAD = 1000;
     std::atomic<bool> has_error{false};
     
-    auto threadFunc = [&has_error]() 
+    auto threadFunc = [&has_error, ALLOCS_PER_THREAD]() 
     {
         try 
         {
