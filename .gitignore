@@ -1,0 +1,11 @@
+# 编译输出目录
+build/
+v1/build/
+v3/build/
+
+# IDE缓存
+.cache/
+.vscode/launch.json
+
+# 生成的图片
+*.png
