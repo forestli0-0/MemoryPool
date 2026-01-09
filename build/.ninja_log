@@ -1,5 +1,0 @@
-# ninja log v6
-3	646	7768512295619983	CMakeFiles/unit_test.dir/src/CentralCache.cpp.obj	28fcdc38d172abb6
-21	650	7768512295790000	CMakeFiles/perf_test.dir/src/CentralCache.cpp.obj	667667d122f0c72b
-16	1341	7768512295749985	CMakeFiles/unit_test.dir/tests/UnitTest.cpp.obj	c692b98a359078d4
-35	1432	7768512295929972	CMakeFiles/perf_test.dir/tests/PerformanceTest.cpp.obj	de8d4da34c9ab466
