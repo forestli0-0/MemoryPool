@@ -1,5 +1,6 @@
 #include "../include/ThreadCache.h"
 #include "../include/CentralCache.h"
+#include <cstdlib>
 
 namespace Kama_memoryPool
 {
