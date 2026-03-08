@@ -1,11 +1,42 @@
-# 编译输出目录
-build/
-v1/build/
-v3/build/
-
-# IDE缓存
+# IDE 和本地缓存
 .cache/
-.vscode/launch.json
+.vscode/
+.vs/
 
-# 生成的图片
-*.png
+# CMake / Ninja / Make 构建目录与中间文件
+build/
+build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+Makefile
+build.ninja
+.ninja_deps
+.ninja_log
+rules.ninja
+
+# Visual Studio / CMake 生成物
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.dir/
+x64/
+Debug/
+Release/
+
+# 编译产物
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+*.exe
+*.exp
+*.ilk
+*.pdb
