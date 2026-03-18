@@ -2,6 +2,15 @@
 .cache/
 .vscode/
 .vs/
+.clangd
+
+# 本地学习资料 / 私有笔记
+V1_DETAILED_FLOWCHART.md
+docs/learning-site/
+docs/private/
+notes/
+study/
+learning/
 
 # CMake / Ninja / Make 构建目录与中间文件
 build/
