@@ -47,12 +47,14 @@ cmake --build v4/build --config Release
 ## 可执行目标
 
 - `unit_test`：功能与状态转换测试
-- `perf_test`：基础性能对比
+- `perf_test`：基础性能对比，其中多线程段采用 steady-state 计时，不包含线程退出阶段的 TLS flush 成本
 - `scenario_bench`：场景化 workload benchmark
 
 ## 本地测试结果
 
 以下结果来自本地 Windows 环境下使用 `MSYS2 UCRT64 + g++ + Ninja` 的一次重新构建与测试，时间数据取 `perf_test` 和 `scenario_bench` 各 `5` 轮平均值，仅作为样例参考。
+
+其中 `perf_test` 的多线程段采用 steady-state 口径：线程先统一起跑，循环完成后立即停表，再允许线程退出，从而避免把 `thread_local ThreadCache` 在线程退出时的缓存下推成本混入分配热路径时间。
 
 ### 功能测试
 
@@ -62,24 +64,25 @@ cmake --build v4/build --config Release
 
 | 场景 | V4 平均耗时 | `new/delete` 平均耗时 | 结果 |
 | --- | ---: | ---: | --- |
-| Single Thread | `2.35 ms` | `8.59 ms` | V4 更快，约 `3.33x` |
-| Multi Thread | `7.42 ms` | `6.80 ms` | V4 略慢 |
-| Mixed Size | `5.51 ms` | `6.22 ms` | V4 略快 |
-| Comparable Shape | `51.52 ms` | `175.51 ms` | V4 更快，约 `3.33x` |
+| Single Thread | `2.255 ms` | `7.547 ms` | V4 更快，约 `3.35x` |
+| Multi Thread (Steady State) | `4.323 ms` | `4.231 ms` | 基本持平，V4 略慢 |
+| Mixed Size | `5.514 ms` | `6.334 ms` | V4 略快，约 `1.15x` |
+| Comparable Shape | `48.436 ms` | `149.340 ms` | V4 更快，约 `3.08x` |
 
 ### 场景化 Benchmark
 
 | 场景 | V4 平均耗时 | `new/delete` 平均耗时 | 结果 |
 | --- | ---: | ---: | --- |
-| Frame Small Churn | `34.44 ms` | `79.83 ms` | V4 更快，约 `2.34x` |
-| Burst And Reuse | `17.81 ms` | `27.21 ms` | V4 更快，约 `1.53x` |
-| Cross Thread Handoff | `22.20 ms` | `12.41 ms` | V4 更慢 |
-| Scene Switch And Scavenge | `10.50 ms` | `10.59 ms` | 基本持平，V4 略快 |
-| Mixed Realistic | `81.90 ms` | `45.69 ms` | V4 更慢 |
+| Frame Small Churn | `29.631 ms` | `73.280 ms` | V4 更快，约 `2.47x` |
+| Burst And Reuse | `15.635 ms` | `23.429 ms` | V4 更快，约 `1.50x` |
+| Cross Thread Handoff | `21.046 ms` | `11.217 ms` | V4 更慢，约 `1.88x` |
+| Scene Switch And Scavenge | `9.411 ms` | `8.880 ms` | 基本持平，V4 略慢 |
+| Mixed Realistic | `67.971 ms` | `43.189 ms` | V4 更慢，约 `1.57x` |
 
 ### 结果观察
 
-- 小对象高频申请/释放和明显可复用的场景下，三级缓存结构可以显著降低分配开销。
+- 单线程以及明显可复用的小对象场景下，三级缓存结构可以稳定降低分配开销。
+- 在剥离线程退出阶段的 TLS flush 成本后，多线程 steady-state 小对象分配已经接近 `new/delete`，但中央层和页层慢路径的常数项仍然偏高。
 - 跨线程交接和更复杂的混合负载下，当前实现仍有进一步优化空间。
 - `scenario_bench` 中配合 `getStats()` 观察到，workload 结束后内存通常会先停留在线程层、中央层或页层缓存中，而 `scavenge()` 后可继续下推并回收给 OS。
 

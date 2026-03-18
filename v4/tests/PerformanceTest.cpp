@@ -1,5 +1,6 @@
 ﻿#include "../include/MemoryPool.h"
 
+#include <atomic>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
@@ -44,6 +45,67 @@ public:
 private:
     std::chrono::steady_clock::time_point start_;
 };
+
+template <typename Worker>
+double runSteadyStateMultiThreadBenchmark(size_t threadCount, Worker&& worker, std::uintptr_t& totalSink)
+{
+    std::vector<std::uintptr_t> threadSinks(threadCount, 0);
+    std::atomic<size_t> readyCount{0};
+    std::atomic<size_t> doneCount{0};
+    std::atomic<bool> startFlag{false};
+    std::atomic<bool> exitFlag{false};
+    std::vector<std::thread> threads;
+    threads.reserve(threadCount);
+
+    for (size_t threadIndex = 0; threadIndex < threadCount; ++threadIndex)
+    {
+        threads.emplace_back([threadIndex, &worker, &threadSinks, &readyCount, &doneCount, &startFlag, &exitFlag]()
+        {
+            readyCount.fetch_add(1);
+            while (!startFlag.load())
+            {
+                std::this_thread::yield();
+            }
+
+            threadSinks[threadIndex] = worker(threadIndex);
+            doneCount.fetch_add(1);
+
+            while (!exitFlag.load())
+            {
+                std::this_thread::yield();
+            }
+        });
+    }
+
+    while (readyCount.load() != threadCount)
+    {
+        std::this_thread::yield();
+    }
+
+    Timer timer;
+    startFlag.store(true);
+
+    while (doneCount.load() != threadCount)
+    {
+        std::this_thread::yield();
+    }
+
+    const double elapsed = timer.elapsedMilliseconds();
+    exitFlag.store(true);
+
+    for (auto& thread : threads)
+    {
+        thread.join();
+    }
+
+    totalSink = 0;
+    for (std::uintptr_t sink : threadSinks)
+    {
+        totalSink += sink;
+    }
+
+    return elapsed;
+}
 
 void warmup()
 {
@@ -97,18 +159,16 @@ void runSingleThreadBenchmark()
 
 void runMultiThreadBenchmark()
 {
-    std::cout << "\n=== Multi Thread Benchmark ===" << std::endl;
+    std::cout << "\n=== Multi Thread Benchmark (Steady State) ===" << std::endl;
     constexpr size_t threadCount = 4;
     constexpr size_t iterations = 100000;
     constexpr size_t sizes[] = {24, 96, 384, 1024};
 
     {
-        std::vector<std::uintptr_t> threadSinks(threadCount, 0);
-        Timer timer;
-        std::vector<std::thread> threads;
-        for (size_t threadIndex = 0; threadIndex < threadCount; ++threadIndex)
-        {
-            threads.emplace_back([threadIndex, &sizes, &threadSinks]()
+        std::uintptr_t totalSink = 0;
+        const double elapsed = runSteadyStateMultiThreadBenchmark(
+            threadCount,
+            [&sizes](size_t threadIndex)
             {
                 std::uintptr_t localSink = 0;
                 for (size_t index = 0; index < iterations; ++index)
@@ -118,32 +178,20 @@ void runMultiThreadBenchmark()
                     localSink += touchAllocation(ptr, size);
                     MemoryPool::deallocate(ptr, size);
                 }
-                threadSinks[threadIndex] = localSink;
-            });
-        }
-        for (auto& thread : threads)
-        {
-            thread.join();
-        }
-        const double elapsed = timer.elapsedMilliseconds();
+                return localSink;
+            },
+            totalSink);
         MemoryPool::scavenge();
-        std::uintptr_t totalSink = 0;
-        for (std::uintptr_t sink : threadSinks)
-        {
-            totalSink += sink;
-        }
         commitBenchmarkSink(totalSink);
         std::cout << "V4 MemoryPool: " << std::fixed << std::setprecision(3)
                   << elapsed << " ms" << std::endl;
     }
 
     {
-        std::vector<std::uintptr_t> threadSinks(threadCount, 0);
-        Timer timer;
-        std::vector<std::thread> threads;
-        for (size_t threadIndex = 0; threadIndex < threadCount; ++threadIndex)
-        {
-            threads.emplace_back([threadIndex, &sizes, &threadSinks]()
+        std::uintptr_t totalSink = 0;
+        const double elapsed = runSteadyStateMultiThreadBenchmark(
+            threadCount,
+            [&sizes](size_t threadIndex)
             {
                 std::uintptr_t localSink = 0;
                 for (size_t index = 0; index < iterations; ++index)
@@ -153,19 +201,9 @@ void runMultiThreadBenchmark()
                     localSink += touchAllocation(ptr, size);
                     delete[] ptr;
                 }
-                threadSinks[threadIndex] = localSink;
-            });
-        }
-        for (auto& thread : threads)
-        {
-            thread.join();
-        }
-        const double elapsed = timer.elapsedMilliseconds();
-        std::uintptr_t totalSink = 0;
-        for (std::uintptr_t sink : threadSinks)
-        {
-            totalSink += sink;
-        }
+                return localSink;
+            },
+            totalSink);
         commitBenchmarkSink(totalSink);
         std::cout << "new/delete:    " << std::fixed << std::setprecision(3)
                   << elapsed << " ms" << std::endl;
