@@ -1,142 +1,158 @@
-# MemoryPool
-高性能C++内存池实现项目
+﻿# MemoryPool
 
-> 基于C++实现的自定义内存池框架，包含V1单版本和V2/V3多级缓存架构两个主要版本
+高性能 C++ 内存池实验项目，按版本逐步演进，从简单定长内存池到多级缓存分配器，再到更接近游戏引擎风格的 V4 分配器实现。
 
-## 项目介绍
+## 项目概览
 
-本项目是基于C++实现的自定义内存池框架，旨在提高内存分配和释放的效率，特别是在多线程环境下。
-该项目中实现的内存池主要分为两个版本，分别是目录v1、v2和v3（v3在v2基础上进行了平台兼容性优化），这两个版本的内存池设计思路大不相同。
+仓库当前包含四个主要版本：
 
-### v1 介绍
-基于哈希映射的多种定长内存分配器，可用于替换new和delete等内存申请释放的系统调用。包含以下主要功能：
-- 内存分配：提供allocate方法，从内存池中分配内存块
-- 内存释放：提供deallocate方法，将内存块归还到内存池
-- 内存块管理：通过allocateNewBlock方法管理内存块的分配和释放
-- 自由链表：使用无锁的自由链表管理空闲内存块，提高并发性能
+- `v1/`：哈希桶 + 定长槽位内存池，适合理解基础内存池设计。
+- `v2/`：引入 `ThreadCache + CentralCache + PageCache` 的三级缓存结构。
+- `v3/`：在 `v2` 基础上继续完善的跨平台版本，使用 `VirtualAlloc` / `mmap` 管理页级内存。
+- `v4/`：更接近 UE-Lite Binned 思路的版本，采用固定小对象 size class、线程缓存、中心缓存和页分配器协作。
 
-项目架构图如下：
-![alt text](images/v1.jpg)
+## 各版本特点
 
-### v2、v3 介绍
-该项目包括以下主要功能：
-- 线程本地缓存（ThreadCache）：每个线程维护自己的内存块链表，减少线程间的锁竞争，提高内存分配效率
-- 中心缓存（CentralCache）：用于管理多个线程共享的内存块，支持批量分配和回收，优化内存利用率
-- 页面缓存（PageCache）：负责从操作系统申请和释放大块内存，支持内存块的合并和分割，减少内存碎片
-- 自旋锁和原子操作：在多线程环境下使用自旋锁和原子操作，确保线程安全的同时减少锁的开销
+### V1
 
-项目架构图如下：
-![alt text](images/v2.png)
+- 以 `8` 字节为粒度，将 `8` 到 `512` 字节的请求映射到 `64` 个定长内存池。
+- 支持从空闲链表中以 `O(1)` 复杂度分配和回收小对象。
+- 提供 `newElement` / `deleteElement` 这类模板接口，便于直接承载对象构造和析构。
+- 代码结构简单，适合学习内存池的基本组成：Block、Slot、FreeList、桶映射。
 
-## 技术亮点
+![V1 架构图](images/v1.jpg)
 
-### V1版本
-- 基于哈希映射的64个定长内存池（8-512字节）
-- 无锁自由链表实现（CAS原子操作）
-- O(1)时间复杂度的内存分配
-- 单线程性能比new/delete快65%
-- 适合理解内存池基础概念
+### V2 / V3
 
-### V3版本（三级缓存架构）
-- ThreadCache：线程级私有缓存，0锁竞争
-- CentralCache：全局共享缓存，批量分配回收
-- PageCache：页级缓存，减少系统调用
-- Windows/Linux跨平台支持（VirtualAlloc/mmap）
-- 单线程性能比new/delete快7.6倍
-- 多线程性能比new/delete快9.5倍
+- 引入三级缓存架构：`ThreadCache -> CentralCache -> PageCache`。
+- `ThreadCache` 使用线程私有缓存，降低多线程分配时的锁竞争。
+- `CentralCache` 负责批量分配与回收，改善线程间共享内存的复用效率。
+- `PageCache` 负责向操作系统申请和归还大块页内存，并处理页级切分与合并。
+- `v3` 针对平台兼容性做了进一步实现，使用 `VirtualAlloc` / `mmap` 管理底层内存。
 
-## 编译
+![V2/V3 架构图](images/v2.png)
 
-先进入v1或v2或v3项目目录：
-```bash
-cd v1  # 或 cd v2 / cd v3
-```
+### V4
 
-在项目目录下创建build目录，并进入该目录：
-```bash
-mkdir build
-cd build
-```
+- 位于 `v4/`，是当前仓库里功能最完整的版本。
+- 小对象固定 size class 覆盖到 `1024` 字节。
+- 采用 `ThreadCache + CentralCache + PageAllocator` 三层结构。
+- 支持页级 split / coalesce，以及向操作系统归还内存。
+- 提供统计接口、主动回收接口以及更完整的测试和场景基准程序。
 
-执行cmake命令：
-```bash
-cmake ..
-```
+## 仓库结构
 
-执行make命令：
-```bash
-make
-```
-
-删除编译生成的可执行文件：
-```bash
-make clean
-```
-
-## 运行
-
-Windows:
-```bash
-cd build/Release
-./unit_test.exe    # 单元测试
-./perf_test.exe    # 性能测试
-```
-
-Linux/macOS:
-```bash
-./unit_test    # 单元测试
-./perf_test    # 性能测试
-```
-
-## 项目结构
-
-```
+```text
 memory-pool/
-├── v1/                    # 单版本哈希映射内存池
-│   ├── include/
-│   │   └── MemoryPool.h   # 核心实现
-│   ├── src/
-│   │   └── MemoryPool.cpp
-│   └── tests/
-│       └── UnitTest.cpp
-│
-├── v2/                    # 三级缓存架构（多平台）
-│   ├── include/
-│   │   ├── MemoryPool.h   # 统一接口
-│   │   ├── ThreadCache.h  # 线程缓存
-│   │   ├── CentralCache.h # 中心缓存
-│   │   └── PageCache.h    # 页面缓存
-│   ├── src/
-│   │   ├── ThreadCache.cpp
-│   │   ├── CentralCache.cpp
-│   │   └── PageCache.cpp
-│   └── tests/
-│       ├── UnitTest.cpp
-│       └── PerformanceTest.cpp
-│
-├── v3/                    # 三级缓存架构（Windows优化）
-│   └── ...                # 与v2类似，使用VirtualAlloc
-│
+├── v1/                  # 基础定长内存池版本
+├── v2/                  # 三级缓存版本
+├── v3/                  # 跨平台优化版三级缓存
+├── v4/                  # UE-Lite Binned 风格版本
+├── benchmarks/          # 统一基准测试
+├── images/              # README 配图
 └── README.md
 ```
 
-## 性能测试结果
+## 构建说明
 
-### v1
-- 单线程：比new/delete快65%
-- 多线程（4线程）：比new/delete慢4倍
+每个版本目录都带有独立的 `CMakeLists.txt`，可以分别构建。
 
-### v3
-- 单线程：比new/delete快7.6倍
-- 多线程（4线程）：比new/delete快9.5倍
+### 通用构建方式
+
+以 `v4` 为例：
+
+```bash
+cmake -S v4 -B v4/build -DCMAKE_BUILD_TYPE=Release
+cmake --build v4/build --config Release
+```
+
+如果要构建其它版本，只需要把 `v4` 替换为 `v1`、`v2` 或 `v3`。
+
+### Windows 常见方式
+
+仓库中已经保留了一些历史构建目录，例如：
+
+- `v1/build/`
+- `v2/build/`
+- `v3/build/`
+- `v4/build-ucrt64/`
+- `benchmarks/build-ucrt64/`
+
+如果你使用 MSYS2 UCRT64 + Ninja，也可以继续沿用这些目录。
+
+## 运行说明
+
+### V1
+
+`v1` 的 CMake 目标会生成单个可执行文件：
+
+```bash
+./MemoryPoolProject
+```
+
+Windows 下通常对应：
+
+```bash
+./MemoryPoolProject.exe
+```
+
+### V2 / V3
+
+这两个版本通常会生成：
+
+```bash
+./unit_test
+./perf_test
+```
+
+Windows 下通常对应：
+
+```bash
+./unit_test.exe
+./perf_test.exe
+```
+
+### V4
+
+`v4` 目录默认会生成三个目标：
+
+```bash
+./unit_test
+./perf_test
+./scenario_bench
+```
+
+Windows 下通常对应：
+
+```bash
+./unit_test.exe
+./perf_test.exe
+./scenario_bench.exe
+```
+
+## 基准测试
+
+统一基准相关文件位于 `benchmarks/`：
+
+- `benchmarks/src/RunV1.cpp`
+- `benchmarks/src/RunV3.cpp`
+- `benchmarks/src/RunV4.cpp`
+- `benchmarks/run_unified_bench.ps1`
+
+已有构建输出和 CSV 结果保存在 `build/bench/` 以及 `benchmarks/build-ucrt64/` 下，可用于不同版本间的对比分析。
+
+## 备注
+
+个人学习资料与私有笔记仅保留在本地环境，不纳入远程仓库。
 
 ## 技术栈
 
-- C++11/14
+- C++11 / C++17
 - CMake
 - 多线程编程
-- 内存管理（VirtualAlloc/mmap）
-- 原子操作与无锁编程
+- 原子操作与无锁结构
+- 页级内存管理
+- Windows `VirtualAlloc` / Linux `mmap`
 
 ## License
 
