@@ -1,52 +1,110 @@
-#pragma once 
+#pragma once
 
 #include <atomic>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
-#include <iostream>
-#include <memory>
+#include <new>
+#include <type_traits>
+#include <utility>
+
+#if !defined(__SIZEOF_INT128__) || !defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16) || INTPTR_MAX != INT64_MAX
 #include <mutex>
+#endif
 
 namespace Kama_memoryPool
 {
+
 #define MEMORY_POOL_NUM 64
 #define SLOT_BASE_SIZE 8
 #define MAX_SLOT_SIZE 512
 
+#if defined(__SIZEOF_INT128__) && defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16) && INTPTR_MAX == INT64_MAX
+#define KAMA_V1_LOCKFREE_ENABLED 1
+#else
+#define KAMA_V1_LOCKFREE_ENABLED 0
+#endif
 
-/* 具体内存池的槽大小没法确定，因为每个内存池的槽大小不同(8的倍数)
-   所以这个槽结构体的sizeof 不是实际的槽大小 */
-struct Slot 
+struct Slot
 {
-    std::atomic<Slot*> next; // 原子指针
+    std::atomic<Slot*> next;
+
+    Slot()
+        : next(nullptr)
+    {
+    }
 };
 
 class MemoryPool
 {
 public:
-    MemoryPool(size_t BlockSize = 4096);
+    explicit MemoryPool(size_t blockSize = 4096);
     ~MemoryPool();
-    
-    void init(size_t);
 
+    void init(size_t size);
     void* allocate();
-    void deallocate(void*);
-private:
-    void allocateNewBlock();
-    size_t padPointer(char* p, size_t align);
+    void deallocate(void* ptr);
 
-    // 使用CAS操作进行无锁入队和出队
+private:
+    size_t padPointer(char* ptr, size_t align) const;
     bool pushFreeList(Slot* slot);
     Slot* popFreeList();
+
+#if KAMA_V1_LOCKFREE_ENABLED
+    struct Block
+    {
+        std::atomic<Block*> next;
+        std::atomic<size_t> nextSlotIndex;
+        char* dataStart;
+        size_t slotCount;
+
+        Block()
+            : next(nullptr)
+            , nextSlotIndex(0)
+            , dataStart(nullptr)
+            , slotCount(0)
+        {
+        }
+    };
+
+    struct alignas(16) FreeListHead
+    {
+        Slot* ptr;
+        std::uint64_t tag;
+    };
+
+    static_assert(std::is_trivially_copyable<FreeListHead>::value, "FreeListHead must be trivially copyable");
+    static_assert(sizeof(FreeListHead) == 16, "FreeListHead must fit in 16 bytes");
+
+    static __int128 packFreeListHead(const FreeListHead& head);
+    static FreeListHead unpackFreeListHead(__int128 raw);
+
+    FreeListHead loadFreeListHead() const;
+    bool compareExchangeFreeListHead(FreeListHead& expected, const FreeListHead& desired);
+
+    Block* createBlock();
+    void publishBlock(Block* block);
+    void* tryAllocateFromBlock(Block* block);
+    void* tryAllocateFromBlocks();
+#else
+    void allocateNewBlock();
+#endif
+
 private:
-    int                 BlockSize_; // 内存块大小
-    int                 SlotSize_; // 槽大小
-    Slot*               firstBlock_; // 指向内存池管理的首个实际内存块
-    Slot*               curSlot_; // 指向当前未被使用过的槽
-    std::atomic<Slot*>  freeList_; // 指向空闲的槽(被使用过后又被释放的槽)
-    Slot*               lastSlot_; // 作为当前内存块中最后能够存放元素的位置标识(超过该位置需申请新的内存块)
-    std::mutex          mutexForFreeList_; // 保证freeList_在多线程中操作的原子性
-    std::mutex          mutexForBlock_; // 保证多线程情况下避免不必要的重复开辟内存导致的浪费行为
+    size_t BlockSize_;
+    size_t SlotSize_;
+
+#if KAMA_V1_LOCKFREE_ENABLED
+    std::atomic<Block*> blockListHead_;
+    alignas(16) volatile __int128 freeListHead_;
+#else
+    Slot* firstBlock_;
+    Slot* curSlot_;
+    std::atomic<Slot*> freeList_;
+    Slot* lastSlot_;
+    std::mutex mutexForFreeList_;
+    std::mutex mutexForBlock_;
+#endif
 };
 
 class HashBucket
@@ -57,19 +115,26 @@ public:
 
     static void* useMemory(size_t size)
     {
-        if (size <= 0)
+        if (size == 0)
+        {
             return nullptr;
-        if (size > MAX_SLOT_SIZE) // 大于512字节的内存，则使用new
-            return operator new(size);
+        }
 
-        // 相当于size / 8 向上取整（因为分配内存只能大不能小
+        if (size > MAX_SLOT_SIZE)
+        {
+            return operator new(size);
+        }
+
         return getMemoryPool(((size + 7) / SLOT_BASE_SIZE) - 1).allocate();
     }
 
     static void freeMemory(void* ptr, size_t size)
     {
         if (!ptr)
+        {
             return;
+        }
+
         if (size > MAX_SLOT_SIZE)
         {
             operator delete(ptr);
@@ -79,35 +144,33 @@ public:
         getMemoryPool(((size + 7) / SLOT_BASE_SIZE) - 1).deallocate(ptr);
     }
 
-    template<typename T, typename... Args> 
+    template<typename T, typename... Args>
     friend T* newElement(Args&&... args);
-    
+
     template<typename T>
-    friend void deleteElement(T* p);
+    friend void deleteElement(T* ptr);
 };
 
 template<typename T, typename... Args>
 T* newElement(Args&&... args)
 {
-    T* p = nullptr;
-    // 根据元素大小选取合适的内存池分配内存
-    if ((p = reinterpret_cast<T*>(HashBucket::useMemory(sizeof(T)))) != nullptr)
-        // 在分配的内存上构造对象
-        new(p) T(std::forward<Args>(args)...);
+    T* ptr = reinterpret_cast<T*>(HashBucket::useMemory(sizeof(T)));
+    if (ptr != nullptr)
+    {
+        new(ptr) T(std::forward<Args>(args)...);
+    }
 
-    return p;
+    return ptr;
 }
 
 template<typename T>
-void deleteElement(T* p)
+void deleteElement(T* ptr)
 {
-    // 对象析构
-    if (p)
+    if (ptr)
     {
-        p->~T();
-         // 内存回收
-        HashBucket::freeMemory(reinterpret_cast<void*>(p), sizeof(T));
+        ptr->~T();
+        HashBucket::freeMemory(reinterpret_cast<void*>(ptr), sizeof(T));
     }
 }
 
-} // namespace memoryPool
+} // namespace Kama_memoryPool
