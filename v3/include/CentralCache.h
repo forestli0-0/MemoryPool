@@ -1,6 +1,8 @@
 #pragma once
+
 #include "Common.h"
 #include <mutex>
+#include <unordered_map>
 
 namespace Kama_memoryPool
 {
@@ -15,31 +17,42 @@ public:
     }
 
     void* fetchRange(size_t index, size_t batchNum);
-    void returnRange(void* start, size_t size, size_t bytes);
+    void returnRange(void* start, size_t count, size_t index);
 
 private:
-    // 相互是还所有原子指针为nullptr
+    struct SpanTracker
+    {
+        void* spanAddr = nullptr;
+        size_t numPages = 0;
+        size_t blockCount = 0;
+        size_t freeCount = 0;
+        size_t index = 0;
+    };
+
     CentralCache()
     {
         for (auto& ptr : centralFreeList_)
         {
             ptr.store(nullptr, std::memory_order_relaxed);
         }
-        // 初始化所有锁
+
         for (auto& lock : locks_)
         {
             lock.clear();
         }
     }
-    // 从页缓存获取内存
+
     void* fetchFromPageCache(size_t size);
+    SpanTracker* getSpanTrackerUnlocked(void* blockAddr);
+    void trackSpan(void* spanAddr, size_t numPages, size_t blockCount, size_t freeCount, size_t index);
+    void updateFreeCountForList(void* start, bool increase);
+    void releaseFullyFreeSpans(size_t index);
 
 private:
-    // 中心缓存的自由链表
     std::array<std::atomic<void*>, FREE_LIST_SIZE> centralFreeList_;
-
-    // 用于同步的自旋锁
     std::array<std::atomic_flag, FREE_LIST_SIZE> locks_;
+    std::unordered_map<void*, SpanTracker> spanTrackers_;
+    std::mutex spanMutex_;
 };
 
 } // namespace memoryPool

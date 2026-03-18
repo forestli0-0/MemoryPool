@@ -1,25 +1,26 @@
 #pragma once
-#include <cstddef>
-#include <atomic>
-#include <array>
-#include <stdio.h>
-namespace Kama_memoryPool 
-{
-// 对齐数和大小定义
-constexpr size_t ALIGNMENT = 8;
-constexpr size_t MAX_BYTES = 256 * 1024; // 256KB
-constexpr size_t FREE_LIST_SIZE = MAX_BYTES / ALIGNMENT; // ALIGNMENT等于指针void*的大小
 
-// 内存块头部信息
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <stdio.h>
+
+namespace Kama_memoryPool
+{
+
+constexpr size_t ALIGNMENT = 8;
+constexpr size_t MAX_BYTES = 256 * 1024;
+constexpr size_t FREE_LIST_SIZE = MAX_BYTES / ALIGNMENT;
+
 struct BlockHeader
 {
-    size_t size; // 内存块大小
-    bool   inUse; // 使用标志
-    BlockHeader* next; // 指向下一个内存块
+    size_t size;
+    bool inUse;
+    BlockHeader* next;
 };
 
-// 大小类管理
-class SizeClass 
+class SizeClass
 {
 public:
     static size_t roundUp(size_t bytes)
@@ -28,10 +29,8 @@ public:
     }
 
     static size_t getIndex(size_t bytes)
-    {   
-        // 确保bytes至少为ALIGNMENT
+    {
         bytes = std::max(bytes, ALIGNMENT);
-        // 向上取整后-1
         return (bytes + ALIGNMENT - 1) / ALIGNMENT - 1;
     }
 };
