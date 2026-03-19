@@ -3,9 +3,10 @@
 #include "../include/PageAllocator.h"
 
 #include <algorithm>
+#include <unordered_map>
 #include <vector>
 
-namespace Kama_memoryPool
+namespace glock
 {
 
 namespace
@@ -39,6 +40,7 @@ CentralCache::CentralCache()
 FreeBlock* CentralCache::acquireBatch(size_t classIndex, size_t requestedCount, size_t& actualCount)
 {
     actualCount = 0;
+    acquireCalls_.fetch_add(1, std::memory_order_relaxed);
     if (classIndex >= SIZE_CLASS_COUNT || requestedCount == 0)
     {
         return nullptr;
@@ -51,6 +53,14 @@ FreeBlock* CentralCache::acquireBatch(size_t classIndex, size_t requestedCount, 
     if (pool == nullptr)
     {
         pool = table.empty_pools;
+        if (pool != nullptr)
+        {
+            emptyPoolHits_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    else
+    {
+        partialPoolHits_.fetch_add(1, std::memory_order_relaxed);
     }
 
     if (pool == nullptr)
@@ -63,18 +73,21 @@ FreeBlock* CentralCache::acquireBatch(size_t classIndex, size_t requestedCount, 
         return nullptr;
     }
 
-    return popBatchFromPoolLocked(table, pool, requestedCount, actualCount);
+    FreeBlock* result = popBatchFromPoolLocked(table, pool, requestedCount, actualCount);
+    if (actualCount != 0)
+    {
+        blocksAcquired_.fetch_add(actualCount, std::memory_order_relaxed);
+    }
+    return result;
 }
 
 void CentralCache::releaseBatch(size_t classIndex, FreeBlock* head, size_t count)
 {
+    releaseCalls_.fetch_add(1, std::memory_order_relaxed);
     if (classIndex >= SIZE_CLASS_COUNT || head == nullptr || count == 0)
     {
         return;
     }
-
-    PoolTable& table = tables_[classIndex];
-    std::lock_guard<std::mutex> lock(table.lock);
 
     struct PendingPoolReturn
     {
@@ -85,7 +98,12 @@ void CentralCache::releaseBatch(size_t classIndex, FreeBlock* head, size_t count
     };
 
     std::vector<PendingPoolReturn> pendingReturns;
-    pendingReturns.reserve(std::min<size_t>(count, 8));
+    pendingReturns.reserve(std::min<size_t>(count, 16));
+    std::unordered_map<PoolInfo*, size_t> pendingIndexByPool;
+    constexpr size_t INDEX_BUILD_THRESHOLD = 8;
+    PendingPoolReturn* lastPending = nullptr;
+    PoolInfo* lastPool = nullptr;
+    bool useIndexedLookup = false;
 
     PageAllocator::getInstance().forEachSpanInBatch(
         head,
@@ -97,19 +115,53 @@ void CentralCache::releaseBatch(size_t classIndex, FreeBlock* head, size_t count
             PoolInfo* pool = (span != nullptr) ? static_cast<PoolInfo*>(span->owner) : nullptr;
             if (pool != nullptr && pool->size_class_index == classIndex)
             {
-                PendingPoolReturn* pending = nullptr;
-                for (PendingPoolReturn& entry : pendingReturns)
+                if (pool == lastPool && lastPending != nullptr)
                 {
-                    if (entry.pool == pool)
+                    lastPending->tail->next = current;
+                    lastPending->tail = current;
+                    ++lastPending->count;
+                    return;
+                }
+
+                PendingPoolReturn* pending = nullptr;
+                if (useIndexedLookup)
+                {
+                    auto it = pendingIndexByPool.find(pool);
+                    if (it != pendingIndexByPool.end())
                     {
-                        pending = &entry;
-                        break;
+                        pending = &pendingReturns[it->second];
+                    }
+                }
+                else
+                {
+                    for (PendingPoolReturn& entry : pendingReturns)
+                    {
+                        if (entry.pool == pool)
+                        {
+                            pending = &entry;
+                            break;
+                        }
+                    }
+
+                    if (pending == nullptr && pendingReturns.size() >= INDEX_BUILD_THRESHOLD)
+                    {
+                        pendingIndexByPool.reserve(std::min<size_t>(count, 32));
+                        for (size_t index = 0; index < pendingReturns.size(); ++index)
+                        {
+                            pendingIndexByPool.emplace(pendingReturns[index].pool, index);
+                        }
+                        useIndexedLookup = true;
                     }
                 }
 
                 if (pending == nullptr)
                 {
                     pendingReturns.push_back({pool, current, current, 1});
+                    pending = &pendingReturns.back();
+                    if (useIndexedLookup)
+                    {
+                        pendingIndexByPool.emplace(pool, pendingReturns.size() - 1);
+                    }
                 }
                 else
                 {
@@ -117,8 +169,20 @@ void CentralCache::releaseBatch(size_t classIndex, FreeBlock* head, size_t count
                     pending->tail = current;
                     ++pending->count;
                 }
+
+                lastPool = pool;
+                lastPending = pending;
             }
         });
+
+    if (pendingReturns.empty())
+    {
+        blocksReleased_.fetch_add(count, std::memory_order_relaxed);
+        return;
+    }
+
+    PoolTable& table = tables_[classIndex];
+    std::lock_guard<std::mutex> lock(table.lock);
 
     for (const PendingPoolReturn& pending : pendingReturns)
     {
@@ -133,11 +197,12 @@ void CentralCache::releaseBatch(size_t classIndex, FreeBlock* head, size_t count
         setPoolStateLocked(table, pending.pool, computeState(pending.pool->free_count, pending.pool->capacity));
     }
 
-    releaseEmptyPoolsLocked(table, false);
+    blocksReleased_.fetch_add(count, std::memory_order_relaxed);
 }
 
 void CentralCache::scavenge(bool force)
 {
+    scavengeCalls_.fetch_add(1, std::memory_order_relaxed);
     for (size_t index = 0; index < SIZE_CLASS_COUNT; ++index)
     {
         PoolTable& table = tables_[index];
@@ -154,6 +219,26 @@ size_t CentralCache::getActivePoolCount() const
 size_t CentralCache::getEmptyPoolCount() const
 {
     return emptyPoolCount_.load(std::memory_order_relaxed);
+}
+
+MemoryPoolStats::CentralCacheRuntimeStats CentralCache::getRuntimeStats() const
+{
+    MemoryPoolStats::CentralCacheRuntimeStats stats;
+    stats.acquire_calls = acquireCalls_.load(std::memory_order_relaxed);
+    stats.release_calls = releaseCalls_.load(std::memory_order_relaxed);
+    stats.blocks_acquired = blocksAcquired_.load(std::memory_order_relaxed);
+    stats.blocks_released = blocksReleased_.load(std::memory_order_relaxed);
+    stats.partial_pool_hits = partialPoolHits_.load(std::memory_order_relaxed);
+    stats.empty_pool_hits = emptyPoolHits_.load(std::memory_order_relaxed);
+    stats.pools_created = poolsCreated_.load(std::memory_order_relaxed);
+    stats.pools_released = poolsReleased_.load(std::memory_order_relaxed);
+    stats.scavenge_calls = scavengeCalls_.load(std::memory_order_relaxed);
+    return stats;
+}
+
+size_t CentralCache::getRetainedEmptyPoolLimit(const PoolTable& table) const
+{
+    return MemoryPoolTuning::getRetainedEmptyPoolLimit(table.size_class_bytes);
 }
 
 CentralCache::PoolInfo* CentralCache::createPoolLocked(size_t classIndex, PoolTable& table)
@@ -198,7 +283,9 @@ CentralCache::PoolInfo* CentralCache::createPoolLocked(size_t classIndex, PoolTa
     pool->size_class_index = static_cast<uint16_t>(classIndex);
     pool->state = PoolState::Empty;
     addPoolToList(table.empty_pools, pool);
+    ++table.empty_pool_count;
     emptyPoolCount_.fetch_add(1, std::memory_order_relaxed);
+    poolsCreated_.fetch_add(1, std::memory_order_relaxed);
     PageAllocator::getInstance().setSpanOwner(pool->span_addr, pool);
     return pool;
 }
@@ -254,6 +341,10 @@ void CentralCache::setPoolStateLocked(PoolTable& table, PoolInfo* pool, PoolStat
             break;
         case PoolState::Empty:
             removePoolFromList(table.empty_pools, pool);
+            if (table.empty_pool_count > 0)
+            {
+                --table.empty_pool_count;
+            }
             emptyPoolCount_.fetch_sub(1, std::memory_order_relaxed);
             break;
         }
@@ -273,6 +364,7 @@ void CentralCache::setPoolStateLocked(PoolTable& table, PoolInfo* pool, PoolStat
             break;
         case PoolState::Empty:
             addPoolToList(table.empty_pools, pool);
+            ++table.empty_pool_count;
             emptyPoolCount_.fetch_add(1, std::memory_order_relaxed);
             break;
         }
@@ -317,7 +409,12 @@ void CentralCache::removePoolFromList(PoolInfo*& head, PoolInfo* pool)
 void CentralCache::releasePoolLocked(PoolTable& table, PoolInfo* pool)
 {
     removePoolFromList(table.empty_pools, pool);
+    if (table.empty_pool_count > 0)
+    {
+        --table.empty_pool_count;
+    }
     emptyPoolCount_.fetch_sub(1, std::memory_order_relaxed);
+    poolsReleased_.fetch_add(1, std::memory_order_relaxed);
     PageAllocator::getInstance().setSpanOwner(pool->span_addr, nullptr);
     PageAllocator::getInstance().deallocateSpan(pool->span_addr, POOL_SPAN_PAGES);
     delete pool;
@@ -325,7 +422,25 @@ void CentralCache::releasePoolLocked(PoolTable& table, PoolInfo* pool)
 
 void CentralCache::releaseEmptyPoolsLocked(PoolTable& table, bool force)
 {
-    PoolInfo* current = force ? table.empty_pools : (table.empty_pools != nullptr ? table.empty_pools->next : nullptr);
+    if (!force)
+    {
+        const size_t retainedLimit = getRetainedEmptyPoolLimit(table);
+        if (table.empty_pool_count <= retainedLimit)
+        {
+            return;
+        }
+    }
+
+    PoolInfo* current = table.empty_pools;
+    if (!force)
+    {
+        const size_t retainedLimit = getRetainedEmptyPoolLimit(table);
+        for (size_t retained = 0; retained < retainedLimit && current != nullptr; ++retained)
+        {
+            current = current->next;
+        }
+    }
+
     while (current != nullptr)
     {
         PoolInfo* next = current->next;
@@ -334,4 +449,4 @@ void CentralCache::releaseEmptyPoolsLocked(PoolTable& table, bool force)
     }
 }
 
-} // namespace Kama_memoryPool
+} // namespace glock

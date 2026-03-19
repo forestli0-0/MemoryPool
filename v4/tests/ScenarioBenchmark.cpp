@@ -11,7 +11,7 @@
 #include <thread>
 #include <vector>
 
-using namespace Kama_memoryPool;
+using namespace glock;
 
 namespace
 {
@@ -91,6 +91,7 @@ void printStateLine(const std::string& label, const MemoryPoolStats& stats)
               << " active_pools=" << std::setw(4) << stats.active_pool_count
               << " empty_pools=" << std::setw(4) << stats.empty_pool_count
               << " cached_pages=" << std::setw(6) << stats.cached_free_pages
+              << " freeable_pages=" << std::setw(6) << stats.page_allocator.immediately_freeable_pages
               << " os_reserved=" << std::setw(10) << stats.os_reserved_bytes
               << " os_released=" << stats.os_released_bytes
               << std::endl;
@@ -111,6 +112,57 @@ void printByteDelta(const MemoryPoolStats& before, const MemoryPoolStats& after)
               << (after.os_reserved_bytes - before.os_reserved_bytes)
               << " released+"
               << (after.os_released_bytes - before.os_released_bytes)
+              << std::endl;
+}
+
+void printThreadCacheDelta(const std::string& label, const MemoryPoolStats& before, const MemoryPoolStats& after)
+{
+    const auto& beforeStats = before.thread_cache;
+    const auto& afterStats = after.thread_cache;
+    std::cout << "  " << std::left << std::setw(16) << label
+              << " hit+" << (afterStats.alloc_hits - beforeStats.alloc_hits)
+              << " miss+" << (afterStats.alloc_misses - beforeStats.alloc_misses)
+              << " fetch+" << (afterStats.batch_fetches - beforeStats.batch_fetches)
+              << " fetched_blk+" << (afterStats.blocks_fetched - beforeStats.blocks_fetched)
+              << " return+" << (afterStats.batch_returns - beforeStats.batch_returns)
+              << " returned_blk+" << (afterStats.blocks_returned - beforeStats.blocks_returned)
+              << " flushed_blk+" << (afterStats.blocks_flushed - beforeStats.blocks_flushed)
+              << " large_a+" << (afterStats.large_alloc_direct - beforeStats.large_alloc_direct)
+              << " large_f+" << (afterStats.large_free_direct - beforeStats.large_free_direct)
+              << std::endl;
+}
+
+void printCentralCacheDelta(const std::string& label, const MemoryPoolStats& before, const MemoryPoolStats& after)
+{
+    const auto& beforeStats = before.central_cache;
+    const auto& afterStats = after.central_cache;
+    std::cout << "  " << std::left << std::setw(16) << label
+              << " acquire+" << (afterStats.acquire_calls - beforeStats.acquire_calls)
+              << " release+" << (afterStats.release_calls - beforeStats.release_calls)
+              << " blk_out+" << (afterStats.blocks_acquired - beforeStats.blocks_acquired)
+              << " blk_in+" << (afterStats.blocks_released - beforeStats.blocks_released)
+              << " partial+" << (afterStats.partial_pool_hits - beforeStats.partial_pool_hits)
+              << " empty+" << (afterStats.empty_pool_hits - beforeStats.empty_pool_hits)
+              << " create+" << (afterStats.pools_created - beforeStats.pools_created)
+              << " release_pool+" << (afterStats.pools_released - beforeStats.pools_released)
+              << " scav+" << (afterStats.scavenge_calls - beforeStats.scavenge_calls)
+              << std::endl;
+}
+
+void printPageAllocatorDelta(const std::string& label, const MemoryPoolStats& before, const MemoryPoolStats& after)
+{
+    const auto& beforeStats = before.page_allocator;
+    const auto& afterStats = after.page_allocator;
+    std::cout << "  " << std::left << std::setw(16) << label
+              << " span_a+" << (afterStats.span_alloc_calls - beforeStats.span_alloc_calls)
+              << " span_f+" << (afterStats.span_free_calls - beforeStats.span_free_calls)
+              << " cache_hit+" << (afterStats.cache_hit_allocs - beforeStats.cache_hit_allocs)
+              << " cache_miss+" << (afterStats.cache_miss_allocs - beforeStats.cache_miss_allocs)
+              << " sys_a+" << (afterStats.system_alloc_calls - beforeStats.system_alloc_calls)
+              << " sys_f+" << (afterStats.system_free_calls - beforeStats.system_free_calls)
+              << " merge+" << (afterStats.coalesce_merges - beforeStats.coalesce_merges)
+              << " released+" << (afterStats.released_spans - beforeStats.released_spans)
+              << " scavenge+" << (afterStats.scavenge_calls - beforeStats.scavenge_calls)
               << std::endl;
 }
 
@@ -166,6 +218,12 @@ void printComparison(const std::string& name,
 
     printRequestDelta(v4Result.stats.before, v4Result.stats.afterWorkload);
     printByteDelta(v4Result.stats.before, v4Result.stats.afterScavenge);
+    printThreadCacheDelta("thread workload", v4Result.stats.before, v4Result.stats.afterWorkload);
+    printCentralCacheDelta("central workload", v4Result.stats.before, v4Result.stats.afterWorkload);
+    printPageAllocatorDelta("page workload", v4Result.stats.before, v4Result.stats.afterWorkload);
+    printThreadCacheDelta("thread scavenge", v4Result.stats.afterWorkload, v4Result.stats.afterScavenge);
+    printCentralCacheDelta("central scavenge", v4Result.stats.afterWorkload, v4Result.stats.afterScavenge);
+    printPageAllocatorDelta("page scavenge", v4Result.stats.afterWorkload, v4Result.stats.afterScavenge);
     printStateLine("before", v4Result.stats.before);
     printStateLine("after workload", v4Result.stats.afterWorkload);
     printStateLine("after scavenge", v4Result.stats.afterScavenge);

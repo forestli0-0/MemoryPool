@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace Kama_memoryPool
+namespace glock
 {
 
 namespace
@@ -40,7 +40,7 @@ PageAllocator::~PageAllocator()
     std::vector<std::pair<void*, size_t>> reservations;
     std::vector<SpanInfo*> spans;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::shared_mutex> lock(mutex_);
         std::unordered_map<std::uintptr_t, size_t> uniqueReservations;
         for (const auto& [addr, span] : spansByAddr_)
         {
@@ -49,6 +49,7 @@ PageAllocator::~PageAllocator()
         }
 
         spansByAddr_.clear();
+        spansByPageId_.clear();
         freeByPages_.clear();
         cachedFreePages_.store(0, std::memory_order_relaxed);
 
@@ -71,21 +72,25 @@ PageAllocator::~PageAllocator()
 
 void* PageAllocator::allocateSpan(size_t pageCount, bool isSmallPoolSpan)
 {
+    spanAllocCalls_.fetch_add(1, std::memory_order_relaxed);
     if (pageCount == 0)
     {
         return nullptr;
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::shared_mutex> lock(mutex_);
 
     auto freeIt = freeByPages_.lower_bound(pageCount);
     if (freeIt != freeByPages_.end())
     {
+        cacheHitAllocs_.fetch_add(1, std::memory_order_relaxed);
         SpanInfo* span = freeIt->second;
+        const size_t originalPageCount = span->page_count;
         removeFreeSpanLocked(span);
 
         if (span->page_count > pageCount)
         {
+            unmapSpanPagesLocked(span);
             SpanInfo* remainder = new SpanInfo;
             remainder->addr = static_cast<char*>(span->addr) + pageCount * PAGE_SIZE;
             remainder->page_count = span->page_count - pageCount;
@@ -95,8 +100,14 @@ void* PageAllocator::allocateSpan(size_t pageCount, bool isSmallPoolSpan)
             remainder->reservation_base = span->reservation_base;
             remainder->reservation_pages = span->reservation_pages;
             spansByAddr_[toAddress(remainder->addr)] = remainder;
+            mapSpanPagesLocked(remainder);
             insertFreeSpanLocked(remainder);
             span->page_count = pageCount;
+            mapSpanPagesLocked(span);
+        }
+        else if (originalPageCount != 0)
+        {
+            // Mapping remains valid when the whole free span is reused as-is.
         }
 
         span->is_free = false;
@@ -105,6 +116,7 @@ void* PageAllocator::allocateSpan(size_t pageCount, bool isSmallPoolSpan)
         return span->addr;
     }
 
+    cacheMissAllocs_.fetch_add(1, std::memory_order_relaxed);
     void* memory = systemAlloc(pageCount);
     if (!memory)
     {
@@ -120,18 +132,20 @@ void* PageAllocator::allocateSpan(size_t pageCount, bool isSmallPoolSpan)
     span->reservation_base = memory;
     span->reservation_pages = pageCount;
     spansByAddr_[toAddress(memory)] = span;
+    mapSpanPagesLocked(span);
     osReservedBytes_.fetch_add(pageCount * PAGE_SIZE, std::memory_order_relaxed);
     return memory;
 }
 
 void PageAllocator::deallocateSpan(void* addr, size_t pageCount)
 {
+    spanFreeCalls_.fetch_add(1, std::memory_order_relaxed);
     if (!addr || pageCount == 0)
     {
         return;
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::shared_mutex> lock(mutex_);
     SpanInfo* span = findSpanStartLocked(addr);
     if (span == nullptr || span->is_free)
     {
@@ -143,12 +157,19 @@ void PageAllocator::deallocateSpan(void* addr, size_t pageCount)
     span->owner = nullptr;
     coalesceLocked(span);
     insertFreeSpanLocked(span);
-    scavengeLocked(false);
+
+    // Defer page trimming until free-page pressure is clearly high.
+    // This keeps large-object frees off the hot path and lets explicit
+    // scavenge handle scene-boundary reclamation.
+    if (cachedFreePages_.load(std::memory_order_relaxed) > MemoryPoolTuning::getPageAutoScavengeTriggerPages())
+    {
+        scavengeLocked(false);
+    }
 }
 
 void PageAllocator::scavenge(bool force)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::shared_mutex> lock(mutex_);
     scavengeLocked(force);
 }
 
@@ -167,6 +188,24 @@ size_t PageAllocator::getReleasedBytes() const
     return osReleasedBytes_.load(std::memory_order_relaxed);
 }
 
+MemoryPoolStats::PageAllocatorRuntimeStats PageAllocator::getRuntimeStats() const
+{
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+
+    MemoryPoolStats::PageAllocatorRuntimeStats stats;
+    stats.span_alloc_calls = spanAllocCalls_.load(std::memory_order_relaxed);
+    stats.span_free_calls = spanFreeCalls_.load(std::memory_order_relaxed);
+    stats.cache_hit_allocs = cacheHitAllocs_.load(std::memory_order_relaxed);
+    stats.cache_miss_allocs = cacheMissAllocs_.load(std::memory_order_relaxed);
+    stats.system_alloc_calls = systemAllocCalls_.load(std::memory_order_relaxed);
+    stats.system_free_calls = systemFreeCalls_.load(std::memory_order_relaxed);
+    stats.coalesce_merges = coalesceMerges_.load(std::memory_order_relaxed);
+    stats.scavenge_calls = scavengeCalls_.load(std::memory_order_relaxed);
+    stats.released_spans = releasedSpans_.load(std::memory_order_relaxed);
+    stats.immediately_freeable_pages = getImmediatelyFreeablePagesLocked();
+    return stats;
+}
+
 void PageAllocator::setSpanOwner(void* spanAddr, void* owner)
 {
     if (spanAddr == nullptr)
@@ -174,7 +213,7 @@ void PageAllocator::setSpanOwner(void* spanAddr, void* owner)
         return;
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::shared_mutex> lock(mutex_);
     SpanInfo* span = findSpanStartLocked(spanAddr);
     if (span != nullptr)
     {
@@ -195,28 +234,51 @@ PageAllocator::SpanInfo* PageAllocator::findSpanStartLocked(void* addr)
 
 PageAllocator::SpanInfo* PageAllocator::findSpanContainingLocked(void* addr)
 {
-    if (addr == nullptr || spansByAddr_.empty())
+    if (addr == nullptr || spansByPageId_.empty())
     {
         return nullptr;
     }
 
-    auto it = spansByAddr_.upper_bound(toAddress(addr));
-    if (it == spansByAddr_.begin())
+    const size_t pageId = toPageId(addr);
+    auto it = spansByPageId_.find(pageId);
+    if (it == spansByPageId_.end())
     {
         return nullptr;
     }
 
-    --it;
-    SpanInfo* span = it->second;
-    const std::uintptr_t begin = toAddress(span->addr);
-    const std::uintptr_t end = begin + span->page_count * PAGE_SIZE;
-    const std::uintptr_t address = toAddress(addr);
-    if (address < begin || address >= end)
+    return it->second;
+}
+
+void PageAllocator::mapSpanPagesLocked(SpanInfo* span)
+{
+    if (span == nullptr)
     {
-        return nullptr;
+        return;
     }
 
-    return span;
+    const size_t firstPageId = toPageId(span->addr);
+    for (size_t pageOffset = 0; pageOffset < span->page_count; ++pageOffset)
+    {
+        spansByPageId_[firstPageId + pageOffset] = span;
+    }
+}
+
+void PageAllocator::unmapSpanPagesLocked(SpanInfo* span)
+{
+    if (span == nullptr)
+    {
+        return;
+    }
+
+    const size_t firstPageId = toPageId(span->addr);
+    for (size_t pageOffset = 0; pageOffset < span->page_count; ++pageOffset)
+    {
+        auto it = spansByPageId_.find(firstPageId + pageOffset);
+        if (it != spansByPageId_.end() && it->second == span)
+        {
+            spansByPageId_.erase(it);
+        }
+    }
 }
 
 void PageAllocator::insertFreeSpanLocked(SpanInfo* span)
@@ -260,11 +322,15 @@ void PageAllocator::coalesceLocked(SpanInfo*& span)
                 && prev->reservation_base == span->reservation_base
                 && spanEnd(prev) == span->addr)
             {
+                coalesceMerges_.fetch_add(1, std::memory_order_relaxed);
                 removeFreeSpanLocked(prev);
+                unmapSpanPagesLocked(prev);
+                unmapSpanPagesLocked(span);
                 prev->page_count += span->page_count;
                 spansByAddr_.erase(currentIt);
                 delete span;
                 span = prev;
+                mapSpanPagesLocked(span);
                 merged = true;
                 continue;
             }
@@ -279,10 +345,14 @@ void PageAllocator::coalesceLocked(SpanInfo*& span)
                 && next->reservation_base == span->reservation_base
                 && spanEnd(span) == next->addr)
             {
+                coalesceMerges_.fetch_add(1, std::memory_order_relaxed);
                 removeFreeSpanLocked(next);
+                unmapSpanPagesLocked(span);
+                unmapSpanPagesLocked(next);
                 span->page_count += next->page_count;
                 spansByAddr_.erase(nextIt);
                 delete next;
+                mapSpanPagesLocked(span);
                 merged = true;
             }
         }
@@ -296,7 +366,9 @@ void PageAllocator::releaseSpanLocked(SpanInfo* span)
         return;
     }
 
+    releasedSpans_.fetch_add(1, std::memory_order_relaxed);
     removeFreeSpanLocked(span);
+    unmapSpanPagesLocked(span);
     spansByAddr_.erase(toAddress(span->addr));
     systemFree(span->addr, span->page_count);
     osReleasedBytes_.fetch_add(span->page_count * PAGE_SIZE, std::memory_order_relaxed);
@@ -305,8 +377,11 @@ void PageAllocator::releaseSpanLocked(SpanInfo* span)
 
 void PageAllocator::scavengeLocked(bool force)
 {
+    scavengeCalls_.fetch_add(1, std::memory_order_relaxed);
     const size_t cachedPages = cachedFreePages_.load(std::memory_order_relaxed);
-    if (!force && cachedPages <= RELEASE_HIGH_WATER_PAGES)
+    const size_t releaseHighWaterPages = MemoryPoolTuning::getPageReleaseHighWaterPages();
+    const size_t releaseLowWaterPages = MemoryPoolTuning::getPageReleaseLowWaterPages();
+    if (!force && cachedPages <= releaseHighWaterPages)
     {
         return;
     }
@@ -325,7 +400,7 @@ void PageAllocator::scavengeLocked(bool force)
         if (!force)
         {
             remainingPages = (remainingPages > span->page_count) ? (remainingPages - span->page_count) : 0;
-            if (remainingPages <= RELEASE_LOW_WATER_PAGES)
+            if (remainingPages <= releaseLowWaterPages)
             {
                 break;
             }
@@ -334,7 +409,7 @@ void PageAllocator::scavengeLocked(bool force)
 
     for (SpanInfo* span : releasable)
     {
-        if (!force && cachedFreePages_.load(std::memory_order_relaxed) <= RELEASE_LOW_WATER_PAGES)
+        if (!force && cachedFreePages_.load(std::memory_order_relaxed) <= releaseLowWaterPages)
         {
             break;
         }
@@ -353,8 +428,23 @@ void PageAllocator::scavengeLocked(bool force)
     }
 }
 
+size_t PageAllocator::getImmediatelyFreeablePagesLocked() const
+{
+    size_t pages = 0;
+    for (const auto& [pageCount, span] : freeByPages_)
+    {
+        (void)pageCount;
+        if (isWholeReservation(span))
+        {
+            pages += span->page_count;
+        }
+    }
+    return pages;
+}
+
 void* PageAllocator::systemAlloc(size_t pageCount)
 {
+    systemAllocCalls_.fetch_add(1, std::memory_order_relaxed);
     const size_t bytes = pageCount * PAGE_SIZE;
 #ifdef _WIN32
     return VirtualAlloc(nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -371,6 +461,7 @@ void PageAllocator::systemFree(void* addr, size_t pageCount)
         return;
     }
 
+    systemFreeCalls_.fetch_add(1, std::memory_order_relaxed);
 #ifdef _WIN32
     VirtualFree(addr, 0, MEM_RELEASE);
 #else
@@ -378,4 +469,4 @@ void PageAllocator::systemFree(void* addr, size_t pageCount)
 #endif
 }
 
-} // namespace Kama_memoryPool
+} // namespace glock

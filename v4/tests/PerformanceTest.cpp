@@ -8,7 +8,7 @@
 #include <thread>
 #include <vector>
 
-using namespace Kama_memoryPool;
+using namespace glock;
 
 namespace
 {

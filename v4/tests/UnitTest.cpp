@@ -9,7 +9,7 @@
 #include <thread>
 #include <vector>
 
-using namespace Kama_memoryPool;
+using namespace glock;
 
 namespace
 {
@@ -216,6 +216,51 @@ void testScavengeReleasesPages()
     assert(after.cached_free_pages == 0);
 }
 
+void testRuntimeTuningRoundTrip()
+{
+    std::cout << "Running runtime tuning round-trip test..." << std::endl;
+    resetAllocator();
+
+    const MemoryPoolRuntimeTuning defaults = MemoryPool::getTuning();
+    MemoryPoolRuntimeTuning tuned = defaults;
+    tuned.batch_target_bytes = 12 * 1024;
+    tuned.batch_max_count = 96;
+    tuned.thread_cache_retain_batches = 4;
+    tuned.thread_cache_high_water_batches = 8;
+    tuned.central_empty_pools_small = 8;
+    tuned.central_empty_pools_medium = 4;
+    tuned.central_empty_pools_large = 2;
+    tuned.page_release_high_water_pages = 2048;
+    tuned.page_release_low_water_pages = 1024;
+    tuned.page_auto_scavenge_trigger_pages = 8192;
+
+    MemoryPool::applyTuning(tuned);
+    const MemoryPoolRuntimeTuning applied = MemoryPool::getTuning();
+    assert(applied.batch_target_bytes == tuned.batch_target_bytes);
+    assert(applied.batch_max_count == tuned.batch_max_count);
+    assert(applied.thread_cache_retain_batches == tuned.thread_cache_retain_batches);
+    assert(applied.thread_cache_high_water_batches == tuned.thread_cache_high_water_batches);
+    assert(applied.central_empty_pools_small == tuned.central_empty_pools_small);
+    assert(applied.central_empty_pools_medium == tuned.central_empty_pools_medium);
+    assert(applied.central_empty_pools_large == tuned.central_empty_pools_large);
+    assert(applied.page_release_high_water_pages == tuned.page_release_high_water_pages);
+    assert(applied.page_release_low_water_pages == tuned.page_release_low_water_pages);
+    assert(applied.page_auto_scavenge_trigger_pages == tuned.page_auto_scavenge_trigger_pages);
+
+    MemoryPool::resetTuning();
+    const MemoryPoolRuntimeTuning reset = MemoryPool::getTuning();
+    assert(reset.batch_target_bytes == defaults.batch_target_bytes);
+    assert(reset.batch_max_count == defaults.batch_max_count);
+    assert(reset.thread_cache_retain_batches == defaults.thread_cache_retain_batches);
+    assert(reset.thread_cache_high_water_batches == defaults.thread_cache_high_water_batches);
+    assert(reset.central_empty_pools_small == defaults.central_empty_pools_small);
+    assert(reset.central_empty_pools_medium == defaults.central_empty_pools_medium);
+    assert(reset.central_empty_pools_large == defaults.central_empty_pools_large);
+    assert(reset.page_release_high_water_pages == defaults.page_release_high_water_pages);
+    assert(reset.page_release_low_water_pages == defaults.page_release_low_water_pages);
+    assert(reset.page_auto_scavenge_trigger_pages == defaults.page_auto_scavenge_trigger_pages);
+}
+
 } // namespace
 
 int main()
@@ -227,6 +272,7 @@ int main()
     testPageAllocatorReuseAndCoalesce();
     testCrossThreadFree();
     testScavengeReleasesPages();
+    testRuntimeTuningRoundTrip();
 
     std::cout << "All V4 unit tests passed." << std::endl;
     return 0;

@@ -35,6 +35,12 @@ add_executable(scenario_bench
     ${TEST_DIR}/ScenarioBenchmark.cpp
 )
 
+add_executable(tuning_sweep
+    ${SOURCES}
+    ${TEST_DIR}/TuningSweep.cpp
+)
+
 target_link_libraries(unit_test PRIVATE Threads::Threads)
 target_link_libraries(perf_test PRIVATE Threads::Threads)
 target_link_libraries(scenario_bench PRIVATE Threads::Threads)
+target_link_libraries(tuning_sweep PRIVATE Threads::Threads)

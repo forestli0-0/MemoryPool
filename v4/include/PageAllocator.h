@@ -5,9 +5,11 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <shared_mutex>
+#include <unordered_map>
 #include <utility>
 
-namespace Kama_memoryPool
+namespace glock
 {
 
 class PageAllocator
@@ -40,11 +42,12 @@ public:
     size_t getCachedFreePages() const;
     size_t getReservedBytes() const;
     size_t getReleasedBytes() const;
+    MemoryPoolStats::PageAllocatorRuntimeStats getRuntimeStats() const;
 
     template <typename Callback>
     void forEachSpanInBatch(FreeBlock* head, size_t count, Callback&& callback)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::shared_lock<std::shared_mutex> lock(mutex_);
 
         FreeBlock* current = head;
         size_t processed = 0;
@@ -91,22 +94,35 @@ private:
 
     SpanInfo* findSpanStartLocked(void* addr);
     SpanInfo* findSpanContainingLocked(void* addr);
+    void mapSpanPagesLocked(SpanInfo* span);
+    void unmapSpanPagesLocked(SpanInfo* span);
     void insertFreeSpanLocked(SpanInfo* span);
     void removeFreeSpanLocked(SpanInfo* span);
     void coalesceLocked(SpanInfo*& span);
     void releaseSpanLocked(SpanInfo* span);
     void scavengeLocked(bool force);
+    size_t getImmediatelyFreeablePagesLocked() const;
 
     void* systemAlloc(size_t pageCount);
     void systemFree(void* addr, size_t pageCount);
 
 private:
     std::map<std::uintptr_t, SpanInfo*> spansByAddr_;
+    std::unordered_map<size_t, SpanInfo*> spansByPageId_;
     std::multimap<size_t, SpanInfo*> freeByPages_;
-    mutable std::mutex mutex_;
+    mutable std::shared_mutex mutex_;
     std::atomic<size_t> cachedFreePages_{0};
     std::atomic<size_t> osReservedBytes_{0};
     std::atomic<size_t> osReleasedBytes_{0};
+    std::atomic<size_t> spanAllocCalls_{0};
+    std::atomic<size_t> spanFreeCalls_{0};
+    std::atomic<size_t> cacheHitAllocs_{0};
+    std::atomic<size_t> cacheMissAllocs_{0};
+    std::atomic<size_t> systemAllocCalls_{0};
+    std::atomic<size_t> systemFreeCalls_{0};
+    std::atomic<size_t> coalesceMerges_{0};
+    std::atomic<size_t> scavengeCalls_{0};
+    std::atomic<size_t> releasedSpans_{0};
 };
 
-} // namespace Kama_memoryPool
+} // namespace glock

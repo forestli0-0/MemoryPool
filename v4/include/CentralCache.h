@@ -6,7 +6,7 @@
 #include <atomic>
 #include <mutex>
 
-namespace Kama_memoryPool
+namespace glock
 {
 
 class CentralCache
@@ -36,6 +36,7 @@ public:
 
     size_t getActivePoolCount() const;
     size_t getEmptyPoolCount() const;
+    MemoryPoolStats::CentralCacheRuntimeStats getRuntimeStats() const;
 
 private:
     struct PoolTable
@@ -45,6 +46,7 @@ private:
         PoolInfo* full_pools = nullptr;
         PoolInfo* empty_pools = nullptr;
         size_t size_class_bytes = 0;
+        size_t empty_pool_count = 0;
     };
 
     CentralCache();
@@ -58,12 +60,22 @@ private:
     void addPoolToList(PoolInfo*& head, PoolInfo* pool);
     void removePoolFromList(PoolInfo*& head, PoolInfo* pool);
     void releasePoolLocked(PoolTable& table, PoolInfo* pool);
+    size_t getRetainedEmptyPoolLimit(const PoolTable& table) const;
     void releaseEmptyPoolsLocked(PoolTable& table, bool force);
 
 private:
     std::array<PoolTable, SIZE_CLASS_COUNT> tables_;
     std::atomic<size_t> activePoolCount_{0};
     std::atomic<size_t> emptyPoolCount_{0};
+    std::atomic<size_t> acquireCalls_{0};
+    std::atomic<size_t> releaseCalls_{0};
+    std::atomic<size_t> blocksAcquired_{0};
+    std::atomic<size_t> blocksReleased_{0};
+    std::atomic<size_t> partialPoolHits_{0};
+    std::atomic<size_t> emptyPoolHits_{0};
+    std::atomic<size_t> poolsCreated_{0};
+    std::atomic<size_t> poolsReleased_{0};
+    std::atomic<size_t> scavengeCalls_{0};
 };
 
-} // namespace Kama_memoryPool
+} // namespace glock
